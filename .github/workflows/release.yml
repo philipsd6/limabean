@@ -1,6 +1,7 @@
 name: Cross-platform Release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "[0-9]*"
@@ -25,9 +26,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set version variable
+        run: echo "VERSION=$(bash ./scripts.dev/get-version.sh)" >> $GITHUB_ENV
+
       - name: Verify tag and Cargo version match
         run: |
-          VERSION=$(bash ./scripts.dev/get-version.sh)
           TAG=${GITHUB_REF_NAME#v}
           [ "$VERSION" = "$TAG" ]
 
@@ -123,6 +126,45 @@ jobs:
         run: |
           cd rust
           cargo publish --package limabean
+
+      - name: Build container image
+        if: matrix.os == 'ubuntu-latest'
+        id: build-image
+        uses: redhat-actions/buildah-build@v2
+        with:
+          base_image: docker.io/clojure:tools-deps
+          image: ${{ github.event.repository.name }}
+          tags: ${{ env.VERSION }} latest
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
+          content: |
+            limabean-standalone.jar
+            release/limabean
+            release/limabean-pod
+          entrypoint: limabean
+          envs: |
+            LIMABEAN_UBERJAR=/limabean-standalone.jar
+          workdir: /data
+          extra-args: -v .:/data
+
+      - name: Echo Outputs
+        run: |
+          echo "### Build :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "Image: ${{ steps.build-image.outputs.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "Tags: ${{ steps.build-image.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "Tagged Image: ${{ steps.build-image.outputs.image-with-tag }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Push to the Github Container Registry
+        id: push-to-ghcr
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          image: ${{ steps.build-image.outputs.image }}
+          tags: ${{ steps.build-image.outputs.tags }}
+          registry: ghcr.io/${{ github.repository_owner }}
 
   release:
     needs: build
