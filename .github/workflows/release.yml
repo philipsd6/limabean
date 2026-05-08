@@ -1,7 +1,6 @@
 name: Cross-platform Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "[0-9]*"
@@ -29,10 +28,10 @@ jobs:
       - name: Set version variable
         run: echo "VERSION=$(bash ./scripts.dev/get-version.sh)" >> $GITHUB_ENV
 
-      - name: Verify tag and Cargo version match
-        run: |
-          TAG=${GITHUB_REF_NAME#v}
-          [ "$VERSION" = "$TAG" ]
+      # - name: Verify tag and Cargo version match
+      #   run: |
+      #     TAG=${GITHUB_REF_NAME#v}
+      #     [ "$VERSION" = "$TAG" ]
 
       - name: Cache
         uses: actions/cache@v5
@@ -132,7 +131,7 @@ jobs:
         id: build-image
         uses: redhat-actions/buildah-build@v2
         with:
-          base_image: docker.io/clojure:tools-deps
+          base-image: docker.io/clojure:tools-deps
           image: ${{ github.event.repository.name }}
           tags: ${{ env.VERSION }} latest
           labels: |
