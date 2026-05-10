@@ -30,7 +30,7 @@ where
 }
 
 mod accumulator;
-
+mod tests;
 mod types;
 
 pub(crate) use crate::api::booking::accumulator::{Accumulator, BookingFailure, BookingSuccess};
