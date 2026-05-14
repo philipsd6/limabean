@@ -7,10 +7,13 @@
 ;; common fields
 (s/def ::date jt/local-date?)
 (s/def ::acc string?)
-(s/def ::units
+(s/def ::number
   (s/or :decimal decimal?
         :int int?))
+(s/def ::units ::number)
 (s/def ::cur string?)
+(s/def ::amount
+  (s/and (s/keys :req-un [::units ::cur]) #(= 2 (count (keys %)))))
 
 ;; metadata
 (s/def ::tag string?)
@@ -20,12 +23,13 @@
 
 (s/def ::metavalue
   (s/or :acc (s/map-of #{:acc} ::acc :count 1)
+        :amount ::amount
         :bool (s/map-of #{:bool} boolean? :count 1)
         :cur (s/map-of #{:cur} ::cur :count 1)
         :date (s/map-of #{:date} ::date :count 1)
         :link (s/map-of #{:link} ::link :count 1)
         :null nil?
-        :number (s/map-of #{:number} (s/or :decimal decimal? :int int?) :count 1)
+        :number (s/map-of #{:number} ::number :count 1)
         :string (s/map-of #{:string} string? :count 1)
         :tag (s/map-of #{:tag} ::tag :count 1)
         :units (s/map-of #{:units} ::units :count 1)))

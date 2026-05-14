@@ -37,12 +37,16 @@ test-clj-offline: build-clj build-rust
     for golden in test-cases/*.golden/{inventory,journal,rollup}; do
         query=${golden##*/}
         beanfile=${golden%.golden/$query}.beancount
-        # rollup is no longer a stand-alone query, must be applied to an inventory
-        if test "$query" == rollup; then
-          query="rollup (inventory)"
+        if test ${beanfile##*/} == full.beancount; then
+            echo "Skipping full.beancount, as uberjar test does not support plugins"
+        else
+            # rollup is no longer a stand-alone query, must be applied to an inventory
+            if test "$query" == rollup; then
+              query="rollup (inventory)"
+            fi
+            echo "Validating $golden"
+            limabean -v --beanfile "$beanfile" --eval "(show ($query))" | diff - $golden
         fi
-        echo "Validating $golden"
-        limabean -v --beanfile "$beanfile" --eval "(show ($query))" | diff - $golden
     done
 
 [working-directory: 'clj']
