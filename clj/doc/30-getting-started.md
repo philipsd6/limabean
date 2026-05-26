@@ -163,3 +163,16 @@ Quotes are essential, as what is being passed is Clojure code exactly as it woul
 - `LIMABEAN_POD_LOG` - path to logfile for `limabean-pod` logging including JSON-RPC messages at `DEBUG` level, otherwise no logging
 - `LIMABEAN_POD_LOG_LEVEL` - custom log levels for `limabean-pod` as per `RUST_LOG` conventions, or default log levels if omitted
 - `LIMABEAN_DEBUG_DIR` - if set, is a directory where intermediate beanfiles (post-plugin, pre-booking), are dumped, for troubleshooting
+
+## Keybindings
+
+Readline support in the REPL is provided by [Rebel Readline](https://github.com/bhauman/rebel-readline), whose [keybindings](https://github.com/bhauman/rebel-readline#key-bindings-in-the-repl) may be customised,
+although how to do this is not immediately apparent.  One way is to add the desired custom keybindings to `~/.clojure/rebel_readline.edn`.  For example, this sets up ALT-left/right for forward and backward word
+for me on macOS in my preferred Emacs mode.
+
+```
+{:key-bindings {:emacs [;; CSI format for ALT-left/right
+                        ["^[[1;3D" :backward-word] ["^[[1;3C" :forward-word]]}}
+```
+
+Exactly what control sequences are generated depends on the terminal being used.  One way to find out is to type into `od -c`.
