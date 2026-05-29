@@ -95,7 +95,7 @@ A number of standard queries are defined.  Probably many useful ones are current
 Of course, the premise of Clojure as user interface means that it is simple to build whatever query is required, as [user provided code](40-plugins.md#User-provided code).
 
 - `balances` - assets and liabilities
-- `income-statement` - profit and loss statement, i.e. income and expenses
+- `income-statement` - profit and loss statement, i.e. income and expenses across a date range
 - `inventory` - raw unfiltered query underlying both `balances` and `income-statement`
 - `journal` - show individual postings
 
@@ -106,14 +106,20 @@ Additionally, `rollup` may be applied to any inventory to show totals across sub
 Inventory pre-filtered to assets and liabilities
 ```
 user=> (show (balances))
+user=> (show (rollup (balances)))
 ```
 
-Just expenses and income for the calendar year 2025
+Income statement for the calendar year 2025
 ```
-user=> (show (inventory (f/date>=< 2025 2026) (f/sub-acc "Expenses" "Income")))
+user=> (show (rollup (income-statement [2025 2026])))
 ```
 
-If you have brought your own `fy` function via [user provided code](40-plugins.md)
+Income statement with certain exclusions
+```
+user=> (show (rollup (income-statement [2025 4 2026 4] (f/none-f (f/sub-acc "Expenses:Car:Depreciation" "Expenses:Tax")))))
+```
+
+If you have brought your own `fy` filter function via [user provided code](40-plugins.md)
 ```
 user=> (show (inventory (fy 25) (f/sub-acc "Expenses" "Income")))
 ```
@@ -163,3 +169,16 @@ Quotes are essential, as what is being passed is Clojure code exactly as it woul
 - `LIMABEAN_POD_LOG` - path to logfile for `limabean-pod` logging including JSON-RPC messages at `DEBUG` level, otherwise no logging
 - `LIMABEAN_POD_LOG_LEVEL` - custom log levels for `limabean-pod` as per `RUST_LOG` conventions, or default log levels if omitted
 - `LIMABEAN_DEBUG_DIR` - if set, is a directory where intermediate beanfiles (post-plugin, pre-booking), are dumped, for troubleshooting
+
+## Keybindings
+
+Readline support in the REPL is provided by [Rebel Readline](https://github.com/bhauman/rebel-readline), whose [keybindings](https://github.com/bhauman/rebel-readline#key-bindings-in-the-repl) may be customised,
+although how to do this is not immediately apparent.  One way is to add the desired custom keybindings to `~/.clojure/rebel_readline.edn`.  For example, this sets up ALT-left/right for forward and backward word
+for me on macOS in my preferred Emacs mode.
+
+```
+{:key-bindings {:emacs [;; CSI format for ALT-left/right
+                        ["^[[1;3D" :backward-word] ["^[[1;3C" :forward-word]]}}
+```
+
+Exactly what control sequences are generated depends on the terminal being used.  One way to find out is to type into `od -c`.

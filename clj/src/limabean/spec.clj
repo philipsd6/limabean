@@ -7,10 +7,13 @@
 ;; common fields
 (s/def ::date jt/local-date?)
 (s/def ::acc string?)
-(s/def ::units
+(s/def ::number
   (s/or :decimal decimal?
         :int int?))
+(s/def ::units ::number)
 (s/def ::cur string?)
+(s/def ::amount
+  (s/and (s/keys :req-un [::units ::cur]) #(= 2 (count (keys %)))))
 
 ;; metadata
 (s/def ::tag string?)
@@ -20,12 +23,13 @@
 
 (s/def ::metavalue
   (s/or :acc (s/map-of #{:acc} ::acc :count 1)
+        :amount ::amount
         :bool (s/map-of #{:bool} boolean? :count 1)
         :cur (s/map-of #{:cur} ::cur :count 1)
         :date (s/map-of #{:date} ::date :count 1)
         :link (s/map-of #{:link} ::link :count 1)
         :null nil?
-        :number (s/map-of #{:number} decimal? :count 1)
+        :number (s/map-of #{:number} ::number :count 1)
         :string (s/map-of #{:string} string? :count 1)
         :tag (s/map-of #{:tag} ::tag :count 1)
         :units (s/map-of #{:units} ::units :count 1)))
@@ -93,8 +97,7 @@
 
 
 ;; directives
-(s/def ::base-directive
-  (s/keys :req-un [::date] :opt-un [::tags ::links ::metadata]))
+(s/def ::base-dct (s/keys :req-un [::date] :opt-un [::tags ::links ::metadata]))
 
 (s/def ::raw-txn
   (s/keys :req-un [::flag]
@@ -132,7 +135,7 @@
 (defmethod raw-dct :query [_] ::query)
 (defmethod raw-dct :custom [_] ::custom)
 (defmethod raw-dct nil [_] (s/and map? #(contains? % :dct)))
-(s/def ::raw-dct (s/and ::base-directive (s/multi-spec raw-dct :dct)))
+(s/def ::raw-dct (s/and ::base-dct (s/multi-spec raw-dct :dct)))
 
 (defmulti booked-dct :dct)
 (defmethod booked-dct :txn [_] ::booked-txn)
@@ -148,10 +151,10 @@
 (defmethod booked-dct :query [_] ::query)
 (defmethod booked-dct :custom [_] ::custom)
 (defmethod booked-dct nil [_] (s/and map? #(contains? % :dct)))
-(s/def ::booked-dct (s/and ::base-directive (s/multi-spec booked-dct :dct)))
+(s/def ::booked-dct (s/and ::base-dct (s/multi-spec booked-dct :dct)))
 
-(s/def ::raw-directives (s/coll-of ::raw-directive))
-(s/def ::booked-directives (s/coll-of :booked-directive))
+(s/def ::raw-dcts (s/coll-of ::raw-dct))
+(s/def ::booked-dcts (s/coll-of :booked-dct))
 
 (defn directive-spec
   "Directive spec for `kind` of directive"
@@ -164,5 +167,5 @@
   "Directive spec for `kind` of directives"
   [kind]
   (case kind
-    :raw ::raw-directives
-    :booked ::booked-directives))
+    :raw ::raw-dcts
+    :booked ::booked-dcts))

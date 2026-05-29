@@ -5,22 +5,24 @@
             [clojure.string :as str]
             [clojure.test :refer [is testing]]
             [clojure.walk :as walk]
+            [limabean]
             [limabean.adapter.edn :as limabean-edn]
+            [limabean.adapter.error :as error]
             [limabean.adapter.json]
-            [limabean.adapter.loader :as loader]
             [limabean.adapter.print]
             [limabean.app :as app]
             [matcho.core :as matcho])
-  (:import [java.nio.file Files]))
+  (:import [java.nio.file Files Paths]))
 
-(defn remove-spans-and-indexes
-  "Remove spans and indexes from all maps"
+(defn trim-exception
+  "Trim any exception for test comparison"
   [data]
-  (walk/postwalk (fn [x]
-                   (cond-> x
-                     (and (map? x) (contains? x :span)) (dissoc :span)
-                     (and (map? x) (contains? x :raw-idx)) (dissoc :raw-idx)))
-                 data))
+  (walk/postwalk
+    (fn [x]
+      (if (and (map? x) (:exception x) (instance? Throwable (:exception x)))
+        (update x :exception (fn [exc] {:message (.getMessage exc)}))
+        x))
+    data))
 
 (defn find-golden-tests
   "Walk the filesystem from root-dir looking for beancount files and golden directories, ignoring .fyi.beancount files."
@@ -44,12 +46,16 @@
           (file-seq (io/file root-dir)))))
 
 
-(defn- temp-file-path
-  [prefix ext]
-  (str (Files/createTempFile prefix
-                             ext
-                             (make-array java.nio.file.attribute.FileAttribute
-                                         0))))
+(defmacro with-temp-file-path
+  "Bind `name` to a temporary file path built from `prefix` and `ext`, execute `forms`, then delete the file."
+  [[name [prefix ext]] & forms]
+  `(let [~name (str (Files/createTempFile
+                      ~prefix
+                      ~ext
+                      (make-array java.nio.file.attribute.FileAttribute 0)))]
+     (try ~@forms
+          (finally (Files/deleteIfExists (Paths/get ~name
+                                                    (make-array String 0)))))))
 
 (defn- diff
   "Return diff as a string, or nil if no diffs"
@@ -76,40 +82,47 @@
         false)
       true)))
 
+(defmacro with-out-file-path
+  "Run forms with `*out*` bound to a writer for `out-file-path`."
+  [out-file-path & forms]
+  `(with-open [w# (io/writer ~out-file-path)] (binding [*out* w#] ~@forms)))
+
 (defn app-tests
   [root-dir]
   (doseq [{:keys [test-name beanfile golden-dir]} (find-golden-tests root-dir)]
     (testing test-name
       (doseq [query ["inventory" "rollup" "journal"]]
-        (let [actual (temp-file-path test-name query)
-              expected (io/file golden-dir query)
-              query-expr (case query
-                           "rollup" "(show (rollup (inventory)))"
-                           (format "(show (%s))" query))]
-          (when (.exists expected)
-            (with-open [w (io/writer actual)]
-              (binding [*out* w]
-                (app/run {:beanfile beanfile, :eval query-expr})))
-            (is (golden-text (format "%s.%s" test-name query)
-                             actual
-                             (.getPath expected)))))))))
+        (with-temp-file-path
+          [actual [test-name query]]
+          (let [expected (io/file golden-dir query)
+                query-expr (case query
+                             "rollup" "(show (rollup (inventory)))"
+                             (format "(show (%s))" query))]
+            (when (.exists expected)
+              (with-out-file-path actual
+                                  (app/run {:beanfile beanfile,
+                                            :eval query-expr}))
+              (is (golden-text (format "%s.%s" test-name query)
+                               actual
+                               (.getPath expected))))))))))
 
-(defn loader-tests
+(defn api-tests
   [root-dir]
   (doseq [{:keys [test-name beanfile golden-dir]} (find-golden-tests root-dir)]
     (testing test-name
       (let [beans (delay (try (println "loading" beanfile)
-                              (loader/load-beanfile beanfile)
+                              (limabean/load-beanfile beanfile)
                               (catch Exception e
                                 (println "Exception while processing"
                                          beanfile
                                          (.getMessage e))
                                 (pprint (Throwable->map e))
                                 nil)))]
-        (doseq [key [:raw-xf-directives :directives]]
+        (doseq [key [:raw-xf-directives :directives :error]]
           (let [expected-file (io/file golden-dir (str (name key) ".edn"))]
             (when (.exists expected-file)
-              (let [actual (force beans)
+              (let [actual (cond-> (force beans)
+                             (= :error key) (trim-exception))
                     expected (limabean-edn/read-string (slurp expected-file))
                     expected-strict (walk/postwalk
                                       (fn [x]
@@ -117,6 +130,15 @@
                                           (with-meta x {:matcho/strict true})
                                           x))
                                       expected)]
-                (matcho/assert expected-strict
-                               (limabean.test/remove-spans-and-indexes
-                                 (get actual key)))))))))))
+                (matcho/assert expected-strict (get actual key))
+                (when (= key :error)
+                  (with-temp-file-path
+                    [actual-ansi-file [test-name "error.ansi"]]
+                    (let [expected-ansi-file (io/file golden-dir
+                                                      (str (name key) ".ansi"))]
+                      (with-out-file-path actual-ansi-file
+                                          (error/print-errors actual))
+                      (is (golden-text (format "%s/error.ansi" test-name)
+                                       actual-ansi-file
+                                       (.getPath
+                                         expected-ansi-file))))))))))))))

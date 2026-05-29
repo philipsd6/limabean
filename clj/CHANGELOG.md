@@ -6,15 +6,65 @@ All notable changes to this project will be documented in this file. This change
 
 ### Fixed
 
+- reject inferred negative per-unit cost/price as errors #127
+
+### Added
+
+- inventory/build-with-history to enable tracking inventory over time
+
+### Changed
+
+- inventory with history is now built automatically when loading beanfile
+- income-statement now requires a date range
+
+[commit log]: https://github.com/tesujimath/limabean/compare/0.6.1...HEAD
+
+## [0.6.1] - 2026-05-25
+
+### Fixed
+
+- no errors printed if booking failure without plugins #118
+- don't leave temp files behind after running tests #122
+
+### Changed
+
+- add support for running plugins from arbitrary sources in standalone mode #120
+
+[commit log]: https://github.com/tesujimath/limabean/compare/0.6.0...0.6.1
+
+## [0.6.0] - 2026-05-20
+
+### Fixed
+
 - sort Open directives before transactions - beancount-parser-lima#66
 - {} lot reduction - limabean-booking#10
 - correct error returned when prior posting depletes inventory limabean-booking#12
 - tolerance for balance directives #103
+- metavalue numbers or amounts in the presence of plugins #106 #108
+- honour `LIMABEAN_CLJ_DEPS` when running from Clojars #111
 
 ### Added
-- Containerfile for podman/docker #94
 
-[commit log]: https://github.com/tesujimath/limabean/compare/0.5.1...HEAD
+- Containerfile for podman/docker #94
+- tests for spec validation with plugins
+- warn if `LIMABEAN_CLJ_DEPS` defined when running from uberjar
+- spans and provenance from raw directives propagated into booked directives
+- provenance tag :booked for booked plugins
+- create synthetic spans for new directives created by booked plugins in addition to raw
+
+### Changed
+
+- removed native Windows as a supported platform in favour of WSL #114
+- appending :directives to filters to pass custom directives is no longer supported
+- refactoring of namespaces so limabean.user is the REPL and limabean the API
+- printing of errors nor encapsulated in error/print-errors
+- full.beancount test now uses identity test plugin, so skipped in uberjar tests
+- limabean.test/loader-tests renamed as api-tests, now supports tests returning errors
+- raw-idx field on booked directives renamed to idx
+- deprecate plugin/error! in favour of plugin/dct-error! for plugin errors
+- JSON-RPC method parser.resolve-span replaced by parser.resolve-spans
+
+[commit log]: https://github.com/tesujimath/limabean/compare/0.5.1...0.6.0
 
 ## [0.5.1] - 2026-05-05
 

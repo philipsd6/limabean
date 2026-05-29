@@ -1,17 +1,15 @@
 (ns limabean.core.inventory
   "Functions to build and query an inventory."
-  (:require [limabean.core.cell :as cell :refer [cell]]))
+  (:require [clojure.set :as set]
+            [limabean.core.account :as account]
+            [limabean.core.cell :as cell :refer [cell]]))
+
+;;;
+;;; Position comparators for merge/append
+;;;
 
 ;; TODO instead of explicit delay/force these functions should be macros,
 ;; except that gave me errors from spec, which may be the CIDER integration
-
-(defn- compare-empty-first-or*
-  "If either x or y is empty, that compares first, otherwise else."
-  [x y else]
-  (cond (and (empty? x) (empty? y)) 0
-        (empty? x) -1
-        (empty? y) 1
-        :else (force else)))
 
 (defn- compare-nil-first-or*
   "If either x or y is nil, that compares first, otherwise else."
@@ -36,122 +34,142 @@
   [x y else]
   (let [cmp (compare-nil-first x y)] (if (not= 0 cmp) cmp (force else))))
 
-(defn- compare-cost-keys
-  "Compare cost keys"
-  [x y]
-  (compare-empty-first-or*
-    x
-    y
-    (let [[date-x cur-x per-unit-x label-x merge-x] x
-          [date-y cur-y per-unit-y label-y merge-y] y]
-      (delay (compare-different-or*
-               date-x
-               date-y
-               (delay (compare-different-or*
-                        cur-x
-                        cur-y
-                        (delay (compare-different-or*
-                                 per-unit-x
-                                 per-unit-y
-                                 (compare-nil-first-different-or*
-                                   label-x
-                                   label-y
-                                   (delay (compare-nil-first merge-x
-                                                             merge-y))))))))))))
+(defn- compare-positions-for-merge
+  "Compare positions for sort/merge order.
 
-(defn- booking-rule
-  "Map a booking method to the rule for combining positions, :merge or :append."
-  [method]
-  (cond (method #{:strict :strict-with-size :fifo :lifo :hifo}) :merge
-        (= method :none) :append
-        :else (throw (Exception. (str "unsupported booking method " method)))))
-(defn- position-key
-  "Return a key for a position which separates out by cost."
-  [pos]
-  (let [cost (:cost pos)]
-    (if cost
-      [(:date cost) (:cur cost) (:per-unit cost) (:label cost) (:merge cost)]
-      [])))
+   First by currency then by cost attributes."
+  [p1 p2]
+  (compare-different-or*
+    (:cur p1)
+    (:cur p2)
+    (let [c1 (:cost p1)
+          c2 (:cost p2)]
+      (compare-nil-first-or*
+        c1
+        c2
+        (delay (compare-different-or*
+                 (:date c1)
+                 (:date c2)
+                 (delay (compare-different-or*
+                          (:cur c1)
+                          (:cur c2)
+                          (delay (compare-different-or*
+                                   (:per-unit c1)
+                                   (:per-unit c2)
+                                   (compare-nil-first-different-or*
+                                     (:label c1)
+                                     (:label c2)
+                                     (delay (compare-nil-first
+                                              (:merge c1)
+                                              (:merge c2))))))))))))))
 
-(defn- update-or-set
-  [m k f v1]
-  (let [v0 (get m k)] (if v0 (assoc m k (f v0)) (assoc m k v1))))
+(defn- compare-positions-for-append
+  "Compare positions for sort/append order.
 
-(defn- single-currency-accumulator
-  "Position accumulator for a single currency"
-  [rule]
-  (case rule
-    :merge {:accumulate-f (fn [positions p1]
-                            (let [k (position-key p1)]
-                              (update-or-set
-                                positions
-                                k
-                                (fn [p0]
-                                  (assoc p0 :units (+ (:units p0) (:units p1))))
-                                p1))),
-            :reduce-f (fn [rf result positions]
-                        (let [cost-keys (sort compare-cost-keys
-                                              (keys positions))]
-                          (reduce (fn [result k] (rf result (get positions k)))
-                            result
-                            cost-keys))),
-            :positions {}}
-    :append {:accumulate-f
-               (fn [positions p1]
-                 (if (contains? p1 :cost)
-                   (assoc positions :at-cost (conj (:at-cost positions) p1))
-                   (assoc positions
-                     :simple (if-let [p0 (:simple positions)]
-                               (assoc p0 :units (+ (:units p0) (:units p1)))
-                               p1)))),
-             :reduce-f (fn [rf result positions]
-                         (let [result1 (if-let [simple (:simple positions)]
-                                         (rf result simple)
-                                         result)]
-                           (reduce rf result1 (:at-cost positions)))),
-             :positions {:simple nil, :at-cost []}}))
+   First by currency then simply p1 after p2 if there are costs."
+  [p1 p2]
+  (compare-different-or*
+    (:cur p1)
+    (:cur p2)
+    (let [c1 (:cost p1) c2 (:cost p2)] (compare-nil-first-or* c1 c2 1))))
 
-(defn- sca-accumulate
-  [sca pos]
-  (let [{:keys [accumulate-f positions]} sca]
-    (assoc sca :positions (accumulate-f positions pos))))
 
-(defn- sca-reduce
-  [rf result sca]
-  (let [{:keys [reduce-f positions]} sca] (reduce-f rf result positions)))
+;;;
+;;; Inventory building
+;;;
 
-(defn accumulator
-  "Create an inventory accumulator with given booking method."
-  ([booking] (let [rule (booking-rule booking)] {:rule rule, :scas {}})))
+(defn- add-positions
+  "Add two matching positions, returning nil if result is zero"
+  [p1 p2]
+  (let [units (+ (:units p1) (:units p2))
+        cost-total (and (:cost p1)
+                        (+ (get-in p1 [:cost :total])
+                           (get-in p2 [:cost :total])))]
+    (if (zero? units)
+      nil
+      (cond-> (assoc p1 :units units)
+        cost-total (assoc-in [:cost :total] cost-total)))))
 
-(defn accumulate
-  "Accumulate a position into an inventory according to its booking method.
+(defn- subtract-positions
+  "Subtract two matching positions, returning nil if result is zero"
+  [p1 p2]
+  (let [units (- (:units p1) (:units p2))
+        cost-total (and (:cost p1)
+                        (- (get-in p1 [:cost :total])
+                           (get-in p2 [:cost :total])))]
+    (if (zero? units)
+      nil
+      (cond-> (assoc p1 :units units)
+        cost-total (assoc-in [:cost :total] cost-total)))))
 
-  Position attributes are `:units`, `:cur`, and `:cost`."
-  [inv p]
-  (let [{:keys [rule scas]} inv
-        ;; lose any extraneous attributes, such as might be in a posting
-        p (select-keys p [:units :cur :cost])
-        cur (:cur p)
-        ;; lookup the sca for this currency, or create a new one
-        sca (get scas cur (single-currency-accumulator rule))]
-    (assoc inv :scas (assoc scas cur (sca-accumulate sca p)))))
+(defn- negate-position
+  "Negate a position, including the cost total if any."
+  [p]
+  (cond-> (update p :units -) (:cost p) (update-in [:cost :total] -)))
 
-(defn positions
-  "Return the current balance of an inventory accumulator as a list of positions."
-  [inv]
-  (let [{:keys [scas]} inv
-        currencies (sort (keys scas))]
-    (reduce (fn [result cur]
-              (sca-reduce (fn [result p]
-                            ;; only keep the non-zero positions
-                            (if (zero? (:units p))
-                              result
-                              (conj result (cell/mark p :position))))
-                          result
-                          (get scas cur)))
-      []
-      currencies)))
+(defn- compare-function-for-booking-method
+  "Return the compare function appropriate for the booking method."
+  [booking-method]
+  (cond (booking-method #{:strict :strict-with-size :fifo :lifo :hifo})
+          compare-positions-for-merge
+        (= booking-method :none) compare-positions-for-append
+        :else (throw (Exception. (str "unsupported booking method "
+                                      booking-method)))))
+(defn merge-position
+  "Merge position in currency order, then by cost attributes."
+  [positions pst booking-method]
+  (let [;; lose any extraneous attributes, such as might
+        ;; be in a posting, and mark as position
+        pos (cell/mark (select-keys pst [:units :cur :cost]) :position)
+        compare-fn (compare-function-for-booking-method booking-method)]
+    (loop [merged []
+           remaining positions]
+      (let [[p & remaining] remaining]
+        (if (nil? p)
+          (conj merged pos)
+          (let [cmp (compare-fn pos p)]
+            (cond (> cmp 0) (recur (conj merged p) remaining)
+                  (< cmp 0) (into (conj merged pos p) remaining)
+                  :else (let [p' (add-positions p pos)]
+                          (if p'
+                            (into (conj merged p') remaining)
+                            (into merged remaining))))))))))
+
+(defn build-with-history
+  "Cumulate postings into inventory and inventory history indexed by date.
+
+  `acc-booking-fn` is a function which returns the booking method for an
+  account."
+  [postings acc-booking-fn]
+  (let [[invs invs-by-date]
+          ;; invs         =          {acc -> [position]}
+          ;; invs-by-date = {date -> {acc -> [position]}}
+          (reduce (fn [[invs invs-by-date] pst]
+                    (let [acc (:acc pst)
+                          merged-positions (merge-position (get invs acc [])
+                                                           pst
+                                                           (acc-booking-fn acc))
+                          invs' (if (seq merged-positions)
+                                  (assoc invs acc merged-positions)
+                                  (dissoc invs acc))
+                          invs-by-date' (assoc invs-by-date (:date pst) invs')]
+                      [invs' invs-by-date']))
+            [{} (sorted-map)]
+            postings)]
+    {:inventory invs, :history invs-by-date}))
+
+(defn build
+  "Cumulate postings into inventory indexed by date.
+
+  `acc-booking-fn` is a function which returns the booking method for an
+             account."
+  [postings acc-booking-fn]
+  (:inventory (build-with-history postings acc-booking-fn)))
+
+
+;;;
+;;; Queries
+;;;
 
 (defn- positions->units-by-currency
   [ps]
@@ -167,6 +185,16 @@
         curs (sort (keys by-cur))]
     curs))
 
+(defn cur-freq
+  "Return map of frequency of currency use by currency."
+  [inv]
+  (reduce (fn [curs acc]
+            (reduce (fn [curs cur] (assoc curs cur (inc (get curs cur 0))))
+              curs
+              (positions->currencies (get inv acc))))
+    {}
+    (cell/real-keys inv)))
+
 (defn positions->units
   "Return positions collapsed down to units only with no costs."
   [ps]
@@ -179,42 +207,53 @@
   [ps cur]
   (let [by-cur (positions->units-by-currency ps)] (get by-cur cur 0M)))
 
-(defn build
-  "Cumulate postings into inventory according to booking method.
+(defn sub-accs
+  "Discard all but non-struct sub-accounts of any of `parent-accs`"
+  [inv parent-accs]
+  (into {}
+        (keep (fn [[acc pos]]
+                (and (some #(account/sub-acc? % acc) parent-accs) [acc pos]))
+              inv)))
 
-  `acc-booking-fn` is a function which returns the booking method for an account."
-  [postings acc-booking-fn]
-  (let [init (transient {})
-        cumulated (persistent!
-                    (reduce (fn [result p]
-                              (let [acc (:acc p)
-                                    inv (if-let [inv (get result acc)]
-                                          inv
-                                          (accumulator (acc-booking-fn acc)))]
-                                (assoc! result acc (accumulate inv p))))
-                      init
-                      postings))
-        accounts (sort (keys cumulated))
-        inv (reduce (fn [result account]
-                      (let [account-positions (positions (get cumulated
-                                                              account))]
-                        (if (seq account-positions)
-                          ;; only keep the non-empty positions
-                          (assoc result account account-positions)
-                          result)))
-              {}
-              accounts)]
-    inv))
+;;;
+;;; History queries
+;;;
 
-(defn cur-freq
-  "Return map of frequency of currency use by currency."
-  [inv]
-  (reduce (fn [curs acc]
-            (reduce (fn [curs cur] (assoc curs cur (inc (get curs cur 0))))
-              curs
-              (positions->currencies (get inv acc))))
-    {}
-    (cell/real-keys inv)))
+(defn history-at
+  "Return the inventory as of the specified `date`"
+  [history date]
+  (let [dates (vec (keys history))
+        i (java.util.Collections/binarySearch dates date)]
+    (if (= i -1)
+      nil
+      (let [i-date-on-or-before (if (< i 0) (abs (+ i 2)) i)]
+        (get history (get dates i-date-on-or-before))))))
+
+(defn positions-diff
+  [ps1 ps2 booking-method]
+  (cond (and (nil? ps1) (nil? ps2)) nil
+        (nil? ps1) ps2
+        (nil? ps2) (mapv negate-position ps1)
+        :else (reduce (fn [positions p]
+                        (merge-position positions p booking-method))
+                []
+                (concat (map negate-position ps1) ps2))))
+
+(defn diff
+  "Build an inventory whose positions are the difference between two inventories"
+  [inv1 inv2 acc-booking-fn]
+  (let [accs (set/union (set (keys inv1)) (set (keys inv2)))]
+    (into {}
+          (keep (fn [acc]
+                  (let [positions (positions-diff (get inv1 acc)
+                                                  (get inv2 acc)
+                                                  (acc-booking-fn acc))]
+                    (and (seq positions) [acc positions])))
+                accs))))
+
+;;;
+;;; Cells
+;;;
 
 (defn- cost->cell
   "Format a cost into a cell, avoiding the clutter of cell/type tagging"

@@ -32,7 +32,11 @@ The original directives loaded from the file are available in the REPL as `(:raw
 
 Any errors in actually running any plugin cause the loader to abort with whatever partial state was reached, for further investigation by the user using the REPL.
 
-### Configuration required to resolve plugins
+### Core plugins
+
+The core plugins previously available with OG Beancount are intended to be bundled with `limabean`.  Currently this list comprises only `auto-accounts`.  Adding to these is a work-in-progress.  These plugins live in the [`beancount.plugins`](../src/beancount/plugins) namespace.
+
+### Configuration required to resolve other plugins
 
 Plugins are Clojure code, so they must be on the Java class-path in order to be resolvable at runtime.  The `limabean` launcher supports running the clojure command line with the [`-Sdeps` option to pass the required dependencies](https://clojure.org/guides/deps_and_cli#command_line_deps).
 
@@ -50,8 +54,6 @@ To use a library from a local path: `io.github.tesujimath/limabean-contrib {:loc
 
 As always, run with `limabean -v` to see what is going on with the Clojure invocation.
 
-Note: it is not possible to load additional plugins when running in the standalone mode, which uses `java` rather than `clojure`.
-
 ## Writing plugins
 
 ### Plugin namespaces
@@ -64,7 +66,7 @@ Legacy plugins appear with their original names, e.g. `beancount.plugins.auto-ac
 
 ### Errors
 
-Any errors detected by plugins may be reported using the `limabean.plugin/error!` macro, as shown for example in the [`limabean.test.plugins.fail`](../test-plugins/src/limabean/test/plugins/fail.clj) plugin.
+Any errors detected by plugins may be reported using the `limabean.plugin/dct-error!` macro, as shown for example in the [`limabean.test.plugins.fail`](../test-plugins/src/limabean/test/plugins/fail.clj) plugin, which annotates the directive emitted with the error indication.
 
 Errors reported to the user do not include a full stack trace, but this may be found in `*exception*`.
 
