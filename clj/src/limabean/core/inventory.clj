@@ -1,6 +1,8 @@
 (ns limabean.core.inventory
   "Functions to build and query an inventory."
-  (:require [limabean.core.cell :as cell :refer [cell]]))
+  (:require [clojure.set :as set]
+            [limabean.core.account :as account]
+            [limabean.core.cell :as cell :refer [cell]]))
 
 ;;;
 ;;; Position comparators for merge/append
@@ -76,8 +78,8 @@
 ;;; Inventory building
 ;;;
 
-(defn- combine-positions
-  "Combine two matching positions"
+(defn- add-positions
+  "Add two matching positions, returning nil if result is zero"
   [p1 p2]
   (let [units (+ (:units p1) (:units p2))
         cost-total (and (:cost p1)
@@ -87,6 +89,23 @@
       nil
       (cond-> (assoc p1 :units units)
         cost-total (assoc-in [:cost :total] cost-total)))))
+
+(defn- subtract-positions
+  "Subtract two matching positions, returning nil if result is zero"
+  [p1 p2]
+  (let [units (- (:units p1) (:units p2))
+        cost-total (and (:cost p1)
+                        (- (get-in p1 [:cost :total])
+                           (get-in p2 [:cost :total])))]
+    (if (zero? units)
+      nil
+      (cond-> (assoc p1 :units units)
+        cost-total (assoc-in [:cost :total] cost-total)))))
+
+(defn- negate-position
+  "Negate a position, including the cost total if any."
+  [p]
+  (cond-> (update p :units -) (:cost p) (update-in [:cost :total] -)))
 
 (defn- compare-function-for-booking-method
   "Return the compare function appropriate for the booking method."
@@ -111,7 +130,7 @@
           (let [cmp (compare-fn pos p)]
             (cond (> cmp 0) (recur (conj merged p) remaining)
                   (< cmp 0) (into (conj merged pos p) remaining)
-                  :else (let [p' (combine-positions p pos)]
+                  :else (let [p' (add-positions p pos)]
                           (if p'
                             (into (conj merged p') remaining)
                             (into merged remaining))))))))))
@@ -188,6 +207,49 @@
   [ps cur]
   (let [by-cur (positions->units-by-currency ps)] (get by-cur cur 0M)))
 
+(defn sub-accs
+  "Discard all but non-struct sub-accounts of any of `parent-accs`"
+  [inv parent-accs]
+  (into {}
+        (keep (fn [[acc pos]]
+                (and (some #(account/sub-acc? % acc) parent-accs) [acc pos]))
+              inv)))
+
+;;;
+;;; History queries
+;;;
+
+(defn history-at
+  "Return the inventory as of the specified `date`"
+  [history date]
+  (let [dates (vec (keys history))
+        i (java.util.Collections/binarySearch dates date)]
+    (if (= i -1)
+      nil
+      (let [i-date-on-or-before (if (< i 0) (abs (+ i 2)) i)]
+        (get history (get dates i-date-on-or-before))))))
+
+(defn positions-diff
+  [ps1 ps2 booking-method]
+  (cond (and (nil? ps1) (nil? ps2)) nil
+        (nil? ps1) ps2
+        (nil? ps2) (mapv negate-position ps1)
+        :else (reduce (fn [positions p]
+                        (merge-position positions p booking-method))
+                []
+                (concat (map negate-position ps1) ps2))))
+
+(defn diff
+  "Build an inventory whose positions are the difference between two inventories"
+  [inv1 inv2 acc-booking-fn]
+  (let [accs (set/union (set (keys inv1)) (set (keys inv2)))]
+    (into {}
+          (keep (fn [acc]
+                  (let [positions (positions-diff (get inv1 acc)
+                                                  (get inv2 acc)
+                                                  (acc-booking-fn acc))]
+                    (and (seq positions) [acc positions])))
+                accs))))
 
 ;;;
 ;;; Cells
